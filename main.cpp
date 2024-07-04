@@ -1,9 +1,14 @@
+#define  _CRT_SECURE_NO_WARNINGS // for STB
+
 #include <stdio.h>
 #include <vector>
 #include <algorithm>
 #include <cmath>
 #include <random>
 #include <direct.h>
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb/stb_image_write.h"
 
 // 0 means randomize
 #define RANDOM_SEED() 1337
@@ -151,6 +156,16 @@ void Stratified(std::vector<float>& p, size_t count)
 		p[i] = (float(i) + dist(rng)) / float(count);
 }
 
+void White(std::vector<float>& p, size_t count)
+{
+	std::mt19937 rng = GetRNG();
+	std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+
+	p.resize(count);
+	for (size_t i = 0; i < count; ++i)
+		p[i] = dist(rng);
+}
+
 float Function_Triangle(float x)
 {
 	// Integrating this from 0 to 1 gives 0.5
@@ -246,6 +261,7 @@ void IntegrationTest(const char* name, const TIntegrationFn& IntegrationFn, floa
 	std::vector<Result> results;
 	results.push_back(IntegrationTestPoints_Sequence(IntegrationFn, actualValue, "Kritzinger", KritzingerLDS, pointCount));
 	results.push_back(IntegrationTestPoints_Sequence(IntegrationFn, actualValue, "GoldenRatio", GoldenRatioLDS, pointCount));
+	results.push_back(IntegrationTestPoints_Sequence(IntegrationFn, actualValue, "White", White, pointCount));
 	results.push_back(IntegrationTestPoints_Set(IntegrationFn, actualValue, "Regular", RegularPoints, pointCount));
 	results.push_back(IntegrationTestPoints_Set(IntegrationFn, actualValue, "RegularWalls", RegularPointsTouchWalls, pointCount));
 	results.push_back(IntegrationTestPoints_Set(IntegrationFn, actualValue, "Stratified", Stratified, pointCount));
@@ -276,6 +292,178 @@ void IntegrationTest(const char* name, const TIntegrationFn& IntegrationFn, floa
 	}
 }
 
+void DrawCircle(std::vector<unsigned char>& pixels, int imageWidth, int imageHeight, int x, int y, float radius, unsigned char R, unsigned char G, unsigned char B)
+{
+	int expandedRadius = (int)std::ceil(radius);
+
+	int minx = std::max(x - expandedRadius, 0);
+	int maxx = std::min(x + expandedRadius, imageWidth - 1);
+	int miny = std::max(y - expandedRadius, 0);
+	int maxy = std::min(y + expandedRadius, imageHeight - 1);
+
+	for (int iy = miny; iy <= maxy; ++iy)
+	{
+		int distY = (iy - y);
+
+		unsigned char* pixel = &pixels[(iy * imageWidth + minx) * 3];
+		for (int ix = minx; ix <= maxx; ++ix)
+		{
+			int distX = (ix - x);
+
+			float dist = std::sqrt(float(distY * distY + distX * distX));
+			if (dist < radius)
+			{
+				pixel[0] = R;
+				pixel[1] = G;
+				pixel[2] = B;
+			}
+
+			// TODO: anti aliasing? smoothstep and do lerp (alpha)
+
+			pixel += 3;
+		}
+	}
+}
+
+template <typename TPointFn>
+void NumberlineTest_Sequence(const char* name, const TPointFn& PointFn, size_t maxCount)
+{
+	static const int c_imageWidth = 512;
+	static const int c_imageHeight = 128;
+	static const int c_numChannels = 3;
+
+	static const float c_pointRadius = 3;
+
+	static const int c_numberLineHalfWidth = int(float(c_imageWidth) * 0.9f * 0.5f);
+	static const int c_numberLineHalfHeight = int(float(c_imageHeight) * 0.5f * 0.5f);
+
+	// init the image to white
+	std::vector<unsigned char> pixels(c_imageWidth * c_imageHeight * c_numChannels, 255);
+
+	// make the points
+	std::vector<float> points;
+	PointFn(points, maxCount);
+	
+	// Draw the numberline
+	for (int ix = -c_numberLineHalfWidth; ix <= c_numberLineHalfWidth; ++ix)
+	{
+		int x = ix + c_imageWidth / 2;
+		int y = c_imageHeight / 2;
+		unsigned char* pixel = &pixels[(y * c_imageWidth + x) * c_numChannels];
+		pixel[0] = 64;
+		pixel[1] = 64;
+		pixel[2] = 64;
+	}
+	for (int iy = -c_numberLineHalfHeight; iy <= c_numberLineHalfHeight; ++iy)
+	{
+		int x1 = c_imageWidth / 2 - c_numberLineHalfWidth;
+		int x2 = c_imageWidth / 2 + c_numberLineHalfWidth;
+		int y = iy + c_imageHeight / 2;
+
+		unsigned char* pixel1 = &pixels[(y * c_imageWidth + x1) * c_numChannels];
+		pixel1[0] = 64;
+		pixel1[1] = 64;
+		pixel1[2] = 64;
+
+		unsigned char* pixel2 = &pixels[(y * c_imageWidth + x2) * c_numChannels];
+		pixel2[0] = 64;
+		pixel2[1] = 64;
+		pixel2[2] = 64;
+	}
+
+	// draw each frame
+	for (size_t i = 0; i < maxCount; ++i)
+	{
+		// plot the next point
+		int px = c_imageWidth / 2 - c_numberLineHalfWidth;
+		px += int(points[i] * float(c_numberLineHalfWidth) * 2.0f);
+		int py = c_imageHeight / 2;
+		DrawCircle(pixels, c_imageWidth, c_imageHeight, px, py, c_pointRadius, 192, 32, 32);
+
+		// save the image
+		char fileName[256];
+		sprintf(fileName, "out/%s.%i.png", name, (int)i);
+		stbi_write_png(fileName, c_imageWidth, c_imageHeight, c_numChannels, pixels.data(), 0);
+	}
+}
+
+template <typename TPointFn>
+void NumberlineTest_Set(const char* name, const TPointFn& PointFn, size_t maxCount)
+{
+	static const int c_imageWidth = 512;
+	static const int c_imageHeight = 128;
+	static const int c_numChannels = 3;
+
+	static const float c_pointRadius = 3;
+
+	static const int c_numberLineHalfWidth = int(float(c_imageWidth) * 0.9f * 0.5f);
+	static const int c_numberLineHalfHeight = int(float(c_imageHeight) * 0.5f * 0.5f);
+
+	for (size_t pointCount = 1; pointCount <= maxCount; ++pointCount)
+	{
+		// init the image to white
+		std::vector<unsigned char> pixels(c_imageWidth * c_imageHeight * c_numChannels, 255);
+
+		// make the points
+		std::vector<float> points;
+		PointFn(points, pointCount);
+
+		// Draw the numberline
+		for (int ix = -c_numberLineHalfWidth; ix <= c_numberLineHalfWidth; ++ix)
+		{
+			int x = ix + c_imageWidth / 2;
+			int y = c_imageHeight / 2;
+			unsigned char* pixel = &pixels[(y * c_imageWidth + x) * c_numChannels];
+			pixel[0] = 64;
+			pixel[1] = 64;
+			pixel[2] = 64;
+		}
+		for (int iy = -c_numberLineHalfHeight; iy <= c_numberLineHalfHeight; ++iy)
+		{
+			int x1 = c_imageWidth / 2 - c_numberLineHalfWidth;
+			int x2 = c_imageWidth / 2 + c_numberLineHalfWidth;
+			int y = iy + c_imageHeight / 2;
+
+			unsigned char* pixel1 = &pixels[(y * c_imageWidth + x1) * c_numChannels];
+			pixel1[0] = 64;
+			pixel1[1] = 64;
+			pixel1[2] = 64;
+
+			unsigned char* pixel2 = &pixels[(y * c_imageWidth + x2) * c_numChannels];
+			pixel2[0] = 64;
+			pixel2[1] = 64;
+			pixel2[2] = 64;
+		}
+
+		// draw each point
+		for (size_t i = 0; i < pointCount; ++i)
+		{
+			// plot the next point
+			int px = c_imageWidth / 2 - c_numberLineHalfWidth;
+			px += int(points[i] * float(c_numberLineHalfWidth) * 2.0f);
+			int py = c_imageHeight / 2;
+			DrawCircle(pixels, c_imageWidth, c_imageHeight, px, py, c_pointRadius, 192, 32, 32);
+		}
+
+		// save the image
+		char fileName[256];
+		sprintf(fileName, "out/%s.%i.png", name, (int)pointCount);
+		stbi_write_png(fileName, c_imageWidth, c_imageHeight, c_numChannels, pixels.data(), 0);
+	}
+}
+
+void NumberlineTest(size_t maxCount)
+{
+	printf("Numberlines...");
+
+	NumberlineTest_Sequence("Kritzinger", KritzingerLDS, maxCount);
+	NumberlineTest_Sequence("GoldenRatio", GoldenRatioLDS, maxCount);
+	NumberlineTest_Sequence("White", White, maxCount);
+	NumberlineTest_Set("Regular", RegularPoints, maxCount);
+	NumberlineTest_Set("RegularWalls", RegularPointsTouchWalls, maxCount);
+	NumberlineTest_Set("Stratified", Stratified, maxCount);
+}
+
 int main(int argc, char** argv)
 {
 	_mkdir("out");
@@ -286,12 +474,15 @@ int main(int argc, char** argv)
 	IntegrationTest("Step", Function_Step, 0.6f, c_pointCount);
 	IntegrationTest("Sine", Function_Sine, 2.0f / c_pi, c_pointCount);
 
+	NumberlineTest(16);
+
 	return 0;
 }
 /*
 TODO:
+- do several runs for convergence and randomize each run. show average.
+
 - could try and do what the paper did for the quadratic terms thing, so it is N^2, not N^3 for generating points.
  * or just mention it
-- make numberline images
- * nah?
+
 */

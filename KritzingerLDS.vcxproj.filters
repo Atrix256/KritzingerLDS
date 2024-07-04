@@ -3,4 +3,14 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <Filter Include="stb">
+      <UniqueIdentifier>{d14ed4a1-d6e2-47f8-8d39-f7320d891cd5}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="stb\stb_image_write.h">
+      <Filter>stb</Filter>
+    </ClInclude>
+  </ItemGroup>
 </Project>
