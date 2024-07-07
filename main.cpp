@@ -56,7 +56,7 @@ void KritzingerLDS_AddPoint(std::vector<float>& p, std::vector<float>& sortedp)
 	// the Sum is for all x in p.
 	// 
 	// If we have N points sorted x_1 < ... < x_n, also with x_0 = 0 and x_(n+1) = 1
-	// then we have N=1 regions between points.
+	// then we have N+1 regions between points.
 	// We can solve the function at each region and find whichever is the smallest.
 	//
 	// To find the minimum of the quadratic, we differentiate, and find where that equals 0.
