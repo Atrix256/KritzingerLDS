@@ -4,30 +4,45 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
-#include <random>
 #include <direct.h>
+#include <random>
+
+#include "pcg/pcg_basic.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb/stb_image_write.h"
 
 // 0 means randomize
-#define RANDOM_SEED() 1337
+#define RANDOM_SEED() 0x1337beef
 
 static const float c_goldenRatio = 1.61803398874989484820f;
 static const float c_goldenRatioConjugate = 0.61803398874989484820f;
 static const float c_pi = 3.14159265359f;
 
+static const unsigned int c_numIntegrationTests = 100000;
+
+inline pcg32_random_t GetRNG(unsigned int seed)
+{
+	pcg32_random_t rng;
+#if RANDOM_SEED() != 0
+	pcg32_srandom_r(&rng, seed + RANDOM_SEED(), 0);
+#else
+	std::random_device device;
+	std::mt19937 generator(device());
+	std::uniform_int_distribution<uint32_t> dist;
+	pcg32_srandom_r(&rng, dist(generator), 0);
+#endif
+	return rng;
+}
+
+inline float RandomFloat01(pcg32_random_t& rng)
+{
+	return float(pcg32_random_r(&rng)) / 4294967295.0f;
+}
+
 float Lerp(float a, float b, float t)
 {
 	return a * (1.0f - t) + b * t;
-}
-
-std::mt19937 GetRNG()
-{
-	std::random_device rd;
-	unsigned int seed = (RANDOM_SEED() == 0) ? rd() : RANDOM_SEED();
-	std::mt19937 rng(seed);
-	return rng;
 }
 
 void KritzingerLDS_AddPoint(std::vector<float>& p, std::vector<float>& sortedp)
@@ -105,23 +120,46 @@ void KritzingerLDS_AddPoint(std::vector<float>& p, std::vector<float>& sortedp)
 	std::sort(sortedp.begin(), sortedp.end());
 }
 
-void KritzingerLDS(std::vector<float>& p, size_t count)
+void KritzingerLDS(std::vector<float>& p, size_t count, unsigned int seed)
 {
-	std::vector<float> sortedp;
-	p.resize(0);
-	p.reserve(count);
-	for (size_t i = 0; i < count; ++i)
-		KritzingerLDS_AddPoint(p, sortedp);
+	thread_local static std::vector<float> cachedp;
+	if (cachedp.size() < count)
+	{
+		std::vector<float> sortedp;
+		cachedp.resize(0);
+		cachedp.reserve(count);
+		for (size_t i = 0; i < count; ++i)
+			KritzingerLDS_AddPoint(cachedp, sortedp);
+	}
+	p = cachedp;
+
+	// apply random torroidal offset
+	if (seed > 0)
+	{
+		auto rng = GetRNG(seed);
+		float offset = RandomFloat01(rng);
+		for (float& f : p)
+			f = std::fmodf(f + offset, 1.0f);
+	}
 }
 
-void RegularPoints(std::vector<float>& p, size_t count)
+void RegularPoints(std::vector<float>& p, size_t count, unsigned int seed)
 {
 	p.resize(count);
 	for (size_t i = 0; i < count; ++i)
 		p[i] = (float(i) + 0.5f) / float(count);
+
+	// apply random torroidal offset
+	if (seed > 0)
+	{
+		auto rng = GetRNG(seed);
+		float offset = RandomFloat01(rng);
+		for (float& f : p)
+			f = std::fmodf(f + offset, 1.0f);
+	}
 }
 
-void RegularPointsTouchWalls(std::vector<float>& p, size_t count)
+void RegularPointsTouchWalls(std::vector<float>& p, size_t count, unsigned int seed)
 {
 	p.resize(count);
 
@@ -133,11 +171,21 @@ void RegularPointsTouchWalls(std::vector<float>& p, size_t count)
 
 	for (size_t i = 0; i < count; ++i)
 		p[i] = float(i) / float(count-1);
+
+	// apply random torroidal offset
+	if (seed > 0)
+	{
+		auto rng = GetRNG(seed);
+		float offset = RandomFloat01(rng);
+		for (float& f : p)
+			f = std::fmodf(f + offset, 1.0f);
+	}
 }
 
-void GoldenRatioLDS(std::vector<float>& p, size_t count)
+void GoldenRatioLDS(std::vector<float>& p, size_t count, unsigned int seed)
 {
-	float value = 0.0f;
+	auto rng = GetRNG(seed);
+	float value = (seed == 0) ? 0.5f : RandomFloat01(rng);
 	p.resize(count);
 	for (size_t i = 0; i < count; ++i)
 	{
@@ -146,24 +194,20 @@ void GoldenRatioLDS(std::vector<float>& p, size_t count)
 	}
 }
 
-void Stratified(std::vector<float>& p, size_t count)
+void Stratified(std::vector<float>& p, size_t count, unsigned int seed)
 {
-	std::mt19937 rng = GetRNG();
-	std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-
+	auto rng = GetRNG(seed);
 	p.resize(count);
 	for (size_t i = 0; i < count; ++i)
-		p[i] = (float(i) + dist(rng)) / float(count);
+		p[i] = (float(i) + RandomFloat01(rng)) / float(count);
 }
 
-void White(std::vector<float>& p, size_t count)
+void White(std::vector<float>& p, size_t count, unsigned int seed)
 {
-	std::mt19937 rng = GetRNG();
-	std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-
+	auto rng = GetRNG(seed);
 	p.resize(count);
 	for (size_t i = 0; i < count; ++i)
-		p[i] = dist(rng);
+		p[i] = RandomFloat01(rng);
 }
 
 float Function_Triangle(float x)
@@ -195,26 +239,43 @@ Result IntegrationTestPoints_Sequence(const TIntegrationFn& IntegrationFn, float
 {
 	printf("  %s\n", name);
 
-	// prepare our results
+	// Do each test
+	std::vector<Result> results(c_numIntegrationTests);
+	#pragma omp parallel for
+	for (int testIndex = 0; testIndex < c_numIntegrationTests; ++testIndex)
+	{
+		// Generate points
+		std::vector<float> points;
+		PointFn(points, pointCount, testIndex);
+
+		// Integerate
+		results[testIndex].values.resize(pointCount);
+		float avgY = 0.0f;
+		for (size_t index = 0; index < pointCount; ++index)
+		{
+			float y = IntegrationFn(points[index]);
+			avgY = Lerp(avgY, y, 1.0f / float(index + 1));
+
+			float absError = std::abs(avgY - actualValue);
+
+			results[testIndex].values[index] = absError;
+		}
+	}
+
+	// Calculate RMSE
 	Result ret;
 	ret.name = name;
 	ret.values.resize(pointCount);
-
-	// Generate points
-	std::vector<float> points;
-	PointFn(points, pointCount);
-
-	// Integerate
-	float avgY = 0.0f;
-	for (size_t index = 0; index < pointCount; ++index)
+	for (unsigned int testIndex = 0; testIndex < c_numIntegrationTests; ++testIndex)
 	{
-		float y = IntegrationFn(points[index]);
-		avgY = Lerp(avgY, y, 1.0f / float(index + 1));
-
-		float error = avgY - actualValue;
-
-		ret.values[index] = std::abs(error);
+		for (size_t index = 0; index < pointCount; ++index)
+		{
+			float absError = results[testIndex].values[index];
+			ret.values[index] = Lerp(ret.values[index], absError * absError, 1.0f / float(testIndex + 1));
+		}
 	}
+	for (float& f : ret.values)
+		f = std::sqrtf(f);
 
 	// return result
 	return ret;
@@ -225,28 +286,47 @@ Result IntegrationTestPoints_Set(const TIntegrationFn& IntegrationFn, float actu
 {
 	printf("  %s\n", name);
 
-	// prepare our results
+	// Do each test
+	std::vector<Result> results(c_numIntegrationTests);
+	#pragma omp parallel for
+	for (int testIndex = 0; testIndex < c_numIntegrationTests; ++testIndex)
+	{
+		results[testIndex].values.resize(pointCount_);
+
+		for (size_t pointCount = 1; pointCount <= pointCount_; pointCount++)
+		{
+			// Generate points
+			std::vector<float> points;
+			PointFn(points, pointCount, testIndex);
+
+			// Integerate
+			float avgY = 0.0f;
+			for (size_t index = 0; index < pointCount; ++index)
+			{
+				float y = IntegrationFn(points[index]);
+				avgY = Lerp(avgY, y, 1.0f / float(index + 1));
+			}
+
+			// store results
+			float absError = std::abs(avgY - actualValue);
+			results[testIndex].values[pointCount - 1] = absError;
+		}
+	}
+
+	// Calculate RMSE
 	Result ret;
 	ret.name = name;
 	ret.values.resize(pointCount_);
-
-	for (size_t pointCount = 1; pointCount <= pointCount_; pointCount++)
+	for (unsigned int testIndex = 0; testIndex < c_numIntegrationTests; ++testIndex)
 	{
-		// Generate points
-		std::vector<float> points;
-		PointFn(points, pointCount);
-
-		// Integerate
-		float avgY = 0.0f;
-		for (size_t index = 0; index < pointCount; ++index)
+		for (size_t index = 0; index < pointCount_; ++index)
 		{
-			float y = IntegrationFn(points[index]);
-			avgY = Lerp(avgY, y, 1.0f / float(index + 1));
+			float absError = results[testIndex].values[index];
+			ret.values[index] = Lerp(ret.values[index], absError * absError, 1.0f / float(testIndex + 1));
 		}
-
-		float error = avgY - actualValue;
-		ret.values[pointCount-1] = std::abs(error);
 	}
+	for (float& f : ret.values)
+		f = std::sqrtf(f);
 
 	// return result
 	return ret;
@@ -262,9 +342,9 @@ void IntegrationTest(const char* name, const TIntegrationFn& IntegrationFn, floa
 	results.push_back(IntegrationTestPoints_Sequence(IntegrationFn, actualValue, "Kritzinger", KritzingerLDS, pointCount));
 	results.push_back(IntegrationTestPoints_Sequence(IntegrationFn, actualValue, "GoldenRatio", GoldenRatioLDS, pointCount));
 	results.push_back(IntegrationTestPoints_Sequence(IntegrationFn, actualValue, "White", White, pointCount));
+	results.push_back(IntegrationTestPoints_Set(IntegrationFn, actualValue, "Stratified", Stratified, pointCount));
 	results.push_back(IntegrationTestPoints_Set(IntegrationFn, actualValue, "Regular", RegularPoints, pointCount));
 	results.push_back(IntegrationTestPoints_Set(IntegrationFn, actualValue, "RegularWalls", RegularPointsTouchWalls, pointCount));
-	results.push_back(IntegrationTestPoints_Set(IntegrationFn, actualValue, "Stratified", Stratified, pointCount));
 
 	// Write CSV
 	char fileName[1024];
@@ -342,7 +422,7 @@ void NumberlineTest_Sequence(const char* name, const TPointFn& PointFn, size_t m
 
 	// make the points
 	std::vector<float> points;
-	PointFn(points, maxCount);
+	PointFn(points, maxCount, 0);
 	
 	// Draw the numberline
 	for (int ix = -c_numberLineHalfWidth; ix <= c_numberLineHalfWidth; ++ix)
@@ -382,7 +462,7 @@ void NumberlineTest_Sequence(const char* name, const TPointFn& PointFn, size_t m
 
 		// save the image
 		char fileName[256];
-		sprintf(fileName, "out/%s.%i.png", name, (int)i);
+		sprintf(fileName, "out/%s.%i.png", name, (int)i+1);
 		stbi_write_png(fileName, c_imageWidth, c_imageHeight, c_numChannels, pixels.data(), 0);
 	}
 }
@@ -406,7 +486,7 @@ void NumberlineTest_Set(const char* name, const TPointFn& PointFn, size_t maxCou
 
 		// make the points
 		std::vector<float> points;
-		PointFn(points, pointCount);
+		PointFn(points, pointCount, 0);
 
 		// Draw the numberline
 		for (int ix = -c_numberLineHalfWidth; ix <= c_numberLineHalfWidth; ++ix)
@@ -459,9 +539,9 @@ void NumberlineTest(size_t maxCount)
 	NumberlineTest_Sequence("Kritzinger", KritzingerLDS, maxCount);
 	NumberlineTest_Sequence("GoldenRatio", GoldenRatioLDS, maxCount);
 	NumberlineTest_Sequence("White", White, maxCount);
+	NumberlineTest_Set("Stratified", Stratified, maxCount);
 	NumberlineTest_Set("Regular", RegularPoints, maxCount);
 	NumberlineTest_Set("RegularWalls", RegularPointsTouchWalls, maxCount);
-	NumberlineTest_Set("Stratified", Stratified, maxCount);
 }
 
 int main(int argc, char** argv)
@@ -479,10 +559,8 @@ int main(int argc, char** argv)
 	return 0;
 }
 /*
-TODO:
-- do several runs for convergence and randomize each run. show average.
-
-- could try and do what the paper did for the quadratic terms thing, so it is N^2, not N^3 for generating points.
- * or just mention it
-
+NOTES:
+* mention what the paper did for the quadratic terms thing, so it is N^2, not N^3 for generating points. updating the terms each loop, instead of recalculating them all.
+* also mention higher dimensionality point sets
+* also link to repo!
 */
